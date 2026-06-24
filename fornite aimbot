@@ -1,0 +1,104 @@
+#include <windows.h>
+#include <iostream>
+#include <vector>
+#include <cmath>
+#include <thread>
+
+struct Vector3 {
+    float x, y, z;
+};
+
+DWORD pid;
+HANDLE hProcess;
+uintptr_t moduleBase = 0;
+
+// UPDATE THESE OFFSETS (use Cheat Engine or current Fortnite dump)
+uintptr_t localPlayerOffset = 0xDEADBEEF;      // Update
+uintptr_t entityListOffset = 0xDEADBEEF;       // Update  
+uintptr_t positionOffset = 0x1A0;              // Example
+uintptr_t boneArrayOffset = 0x5E8;             // Example
+uintptr_t cameraOffset = 0x1234;               // Example
+
+float GetDistance(Vector3 a, Vector3 b) {
+    return sqrt(pow(a.x - b.x, 2) + pow(a.y - b.y, 2) + pow(a.z - b.z, 2));
+}
+
+Vector3 CalculateAngle(Vector3 src, Vector3 dst) {
+    Vector3 angle;
+    Vector3 delta = { dst.x - src.x, dst.y - src.y, dst.z - src.z };
+    float hyp = sqrt(delta.x * delta.x + delta.y * delta.y);
+    angle.x = atan2(delta.y, delta.x) * 180.0f / 3.14159265358979323846f;
+    angle.y = atan2(delta.z, hyp) * 180.0f / 3.14159265358979323846f;
+    angle.z = 0;
+    return angle;
+}
+
+void AimAt(Vector3 targetPos) {
+    // Read current view angles and write new ones (simplified)
+    Vector3 currentAngles;
+    ReadProcessMemory(hProcess, (LPCVOID)(moduleBase + localPlayerOffset + cameraOffset), &currentAngles, sizeof(Vector3), nullptr);
+    
+    Vector3 newAngles = CalculateAngle(currentAngles, targetPos);
+    
+    float smooth = 6.0f;  // Lower = snappier
+    Vector3 delta = { newAngles.x - currentAngles.x, newAngles.y - currentAngles.y, 0 };
+    delta.x /= smooth;
+    delta.y /= smooth;
+    
+    currentAngles.x += delta.x;
+    currentAngles.y += delta.y;
+    
+    WriteProcessMemory(hProcess, (LPVOID)(moduleBase + localPlayerOffset + cameraOffset), &currentAngles, sizeof(Vector3), nullptr);
+}
+
+int main() {
+    HWND hwnd = FindWindowA(0, "Fortnite  ");
+    GetWindowThreadProcessId(hwnd, &pid);
+    hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+    
+    // Get module base for FortniteClient-Win64-Shipping.exe (use signature scan or manual)
+    moduleBase = 0; // Fill this properly
+
+    std::cout << "Fortnite Aimbot started. Hold RMB to aim.\n";
+
+    while (true) {
+        if (GetAsyncKeyState(VK_RBUTTON) & 0x8000) {
+            uintptr_t localPlayer;
+            ReadProcessMemory(hProcess, (LPCVOID)(moduleBase + localPlayerOffset), &localPlayer, sizeof(uintptr_t), nullptr);
+            
+            Vector3 localPos;
+            ReadProcessMemory(hProcess, (LPCVOID)(localPlayer + positionOffset), &localPos, sizeof(Vector3), nullptr);
+            
+            float closestDist = 99999.0f;
+            Vector3 closestHead = {0,0,0};
+            
+            // Entity loop (simplified - real one needs proper entity list)
+            for (int i = 0; i < 100; i++) {
+                uintptr_t entity;
+                ReadProcessMemory(hProcess, (LPCVOID)(moduleBase + entityListOffset + i * 0x8), &entity, sizeof(uintptr_t), nullptr);
+                if (!entity) continue;
+                
+                Vector3 enemyPos;
+                ReadProcessMemory(hProcess, (LPCVOID)(entity + positionOffset), &enemyPos, sizeof(Vector3), nullptr);
+                
+                // Head bone
+                uintptr_t boneArray;
+                ReadProcessMemory(hProcess, (LPCVOID)(entity + boneArrayOffset), &boneArray, sizeof(uintptr_t), nullptr);
+                Vector3 headPos;
+                ReadProcessMemory(hProcess, (LPCVOID)(boneArray + 0x30 * 0x30), &headPos, sizeof(Vector3), nullptr); // Adjust bone index
+                
+                float dist = GetDistance(localPos, headPos);
+                if (dist < closestDist && dist < 300.0f) {
+                    closestDist = dist;
+                    closestHead = headPos;
+                }
+            }
+            
+            if (closestDist < 300.0f) {
+                AimAt(closestHead);
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return 0;
+}
